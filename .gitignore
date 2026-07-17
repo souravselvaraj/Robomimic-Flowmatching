@@ -1,0 +1,24 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# venvs
+.venv/
+venv/
+
+# training / eval artifacts
+output/
+*.pth
+*.mp4
+*.out
+*.log
+
+# datasets
+*.hdf5
+
+# os
+.DS_Store
