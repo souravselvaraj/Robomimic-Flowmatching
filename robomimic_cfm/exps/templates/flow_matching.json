@@ -106,6 +106,15 @@
             "kernel_size": 5,
             "n_groups": 8
         },
+        "transformer": {
+            "enabled": false,
+            "n_emb": 256,
+            "n_layer": 8,
+            "n_head": 4,
+            "p_drop": 0.1,
+            "diffusion_step_embed_dim": 256,
+            "causal": false
+        },
         "ema": {
             "enabled": true,
             "power": 0.75

@@ -28,6 +28,8 @@ import robomimic.utils.obs_utils as ObsUtils
 from robomimic.algo import register_algo_factory_func, PolicyAlgo
 from robomimic.algo.diffusion_policy import replace_bn_with_gn
 
+from robomimic_cfm.transformer_nets import ConditionalTransformer1D
+
 
 @register_algo_factory_func("flow_matching")
 def algo_config_to_class(algo_config):
@@ -41,10 +43,12 @@ def algo_config_to_class(algo_config):
         algo_class: subclass of Algo
         algo_kwargs (dict): dictionary of additional kwargs to pass to algorithm
     """
-    if algo_config.unet.enabled:
+    # a single algo class handles both backbones; the velocity network is chosen
+    # in _create_networks based on which backbone is enabled
+    if algo_config.unet.enabled or algo_config.transformer.enabled:
         return FlowMatchingUNet, {}
     else:
-        raise RuntimeError()
+        raise RuntimeError("flow_matching: enable exactly one of algo.unet or algo.transformer")
 
 
 class FlowMatchingUNet(PolicyAlgo):
@@ -68,16 +72,33 @@ class FlowMatchingUNet(PolicyAlgo):
 
         obs_dim = obs_encoder.output_shape()[0]
 
-        # velocity field network - same backbone as Diffusion Policy, but the
-        # output is interpreted as the flow velocity instead of noise
-        velocity_net = DPNets.ConditionalUnet1D(
-            input_dim=self.ac_dim,
-            global_cond_dim=obs_dim * self.algo_config.horizon.observation_horizon,
-            diffusion_step_embed_dim=self.algo_config.unet.diffusion_step_embed_dim,
-            down_dims=self.algo_config.unet.down_dims,
-            kernel_size=self.algo_config.unet.kernel_size,
-            n_groups=self.algo_config.unet.n_groups,
-        )
+        # velocity field network - the output is interpreted as the flow velocity
+        # (instead of a denoising target). Two interchangeable backbones share the
+        # same call signature: net(sample, timestep, global_cond) -> velocity.
+        global_cond_dim = obs_dim * self.algo_config.horizon.observation_horizon
+        if self.algo_config.transformer.enabled:
+            # 1D DiT over the predicted action chunk (AdaLN conditioning on t + obs)
+            velocity_net = ConditionalTransformer1D(
+                input_dim=self.ac_dim,
+                global_cond_dim=global_cond_dim,
+                n_emb=self.algo_config.transformer.n_emb,
+                n_layer=self.algo_config.transformer.n_layer,
+                n_head=self.algo_config.transformer.n_head,
+                p_drop=self.algo_config.transformer.p_drop,
+                max_positions=self.algo_config.horizon.prediction_horizon,
+                diffusion_step_embed_dim=self.algo_config.transformer.diffusion_step_embed_dim,
+                causal=self.algo_config.transformer.causal,
+            )
+        else:
+            # same convolutional backbone as Diffusion Policy
+            velocity_net = DPNets.ConditionalUnet1D(
+                input_dim=self.ac_dim,
+                global_cond_dim=global_cond_dim,
+                diffusion_step_embed_dim=self.algo_config.unet.diffusion_step_embed_dim,
+                down_dims=self.algo_config.unet.down_dims,
+                kernel_size=self.algo_config.unet.kernel_size,
+                n_groups=self.algo_config.unet.n_groups,
+            )
 
         # the final arch has 2 parts
         nets = nn.ModuleDict({

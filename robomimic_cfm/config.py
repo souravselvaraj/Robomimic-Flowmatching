@@ -48,12 +48,24 @@ class FlowMatchingConfig(BaseConfig):
         self.algo.horizon.action_horizon = 8
         self.algo.horizon.prediction_horizon = 16
 
-        # UNet parameters
+        # backbone: enable exactly one of unet / transformer
+
+        # UNet parameters (default backbone)
         self.algo.unet.enabled = True
         self.algo.unet.diffusion_step_embed_dim = 256
         self.algo.unet.down_dims = [256,512,1024]
         self.algo.unet.kernel_size = 5
         self.algo.unet.n_groups = 8
+
+        # Transformer (1D DiT) parameters - set unet.enabled=False and
+        # transformer.enabled=True to use this backbone instead
+        self.algo.transformer.enabled = False
+        self.algo.transformer.n_emb = 256                     # embedding width
+        self.algo.transformer.n_layer = 8                     # number of DiT blocks
+        self.algo.transformer.n_head = 4                      # attention heads
+        self.algo.transformer.p_drop = 0.1                    # dropout
+        self.algo.transformer.diffusion_step_embed_dim = 256  # sinusoidal time embed width
+        self.algo.transformer.causal = False                  # bidirectional over the action chunk
 
         # EMA parameters
         self.algo.ema.enabled = True

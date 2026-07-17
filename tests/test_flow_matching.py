@@ -125,6 +125,17 @@ def fm_single_step_modifier(config):
     return config
 
 
+@register_mod("flow_matching-transformer")
+def fm_transformer_modifier(config):
+    # 1D DiT backbone instead of the conv UNet (small dims to keep the test fast)
+    config.algo.unet.enabled = False
+    config.algo.transformer.enabled = True
+    config.algo.transformer.n_emb = 64
+    config.algo.transformer.n_layer = 2
+    config.algo.transformer.n_head = 2
+    return config
+
+
 def test_flow_matching(silence=True, video=False):
     for test_name in MODIFIERS:
         context = silence_stdout() if silence else dummy_context_mgr()
