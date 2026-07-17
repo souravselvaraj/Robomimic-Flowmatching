@@ -20,15 +20,15 @@ dependencies = [
 extras = ["imageio", "imageio-ffmpeg", "h5py", "tqdm"]
 
 [project.urls]
-Homepage = "https://github.com/souravselvaraj/robomimic-cfm"
+Homepage = "https://github.com/souravselvaraj/Robomimic-Flowmatching"
 Upstream = "https://github.com/ARISE-Initiative/robomimic"
 
-# robomimic is not on PyPI at the 0.5.0 API this package targets, so for a local,
-# reproducible build we depend on the sibling fork checkout that the benchmark
-# results were produced against. For publication, replace this with a git pin,
-# e.g.  robomimic = { git = "https://github.com/souravselvaraj/robomimic" }
+# robomimic on PyPI stops at 0.3.0, which predates the diffusion-policy backbone
+# and 0.5.0 API this package builds on. We therefore depend on the robomimic fork
+# the results were produced against, pinned by commit for reproducibility. `uv sync`
+# clones it automatically, so a fresh clone of this repo builds without extra steps.
 [tool.uv.sources]
-robomimic = { path = "../Flowmatch/robomimic", editable = true }
+robomimic = { git = "https://github.com/souravselvaraj/robomimic", rev = "562c8e323485391a049b67be41990f527b0f07a2" }
 
 [build-system]
 requires = ["hatchling"]
