@@ -30,7 +30,7 @@
 -------
 
 ## Latest Updates
-- [07/19/2026] Image-observation support for the transformer backbone: two camera views take Square from ~0.40 to **1.00** rollout success, past the low-dim UNet. Config + dataset-generation script included.
+- [07/19/2026] Image observations for the transformer backbone across Square, Transport and Tool Hang. Two camera views take Square from ~0.40 to **1.00**, past the low-dim UNet; Transport and Tool Hang do not follow (0.60 / 0.10), so vision fixes an observability bottleneck rather than task difficulty. Includes GPU (EGL) dataset rendering, ~100× faster than software OSMesa.
 - [07/17/2026] **v0.1.0** Added a Transformer (1D DiT) backbone alongside the UNet, with AdaLN-Zero conditioning on flow time + observations. Select it with `algo.transformer.enabled=true`.
 - [07/16/2026] Full 3-seed benchmark sweep across all five `low_dim` proficient-human tasks; CFM matches or beats Diffusion Policy, notably **+11.7 points on Square**.
 - [07/15/2026] Inference-speed benchmarks: **11× faster** than DDPM-100 at the default 10-step setting on an identical 65M-parameter UNet.
@@ -101,34 +101,45 @@ advantage there is quality retained at few steps rather than raw speed.
 ### Transformer backbone and image observations (exploratory)
 
 <p align="center">
-  <img src="assets/square_image.gif" width="30%" alt="Square — image (2-camera) flow-matching policy"/>
+  <img src="assets/square_image.gif" width="30%" alt="Square — image flow-matching policy"/>
+  <img src="assets/transport_image.gif" width="30%" alt="Transport — image flow-matching policy"/>
 </p>
 
-Single-seed runs of the 1D DiT backbone (1000 epochs), separate from the 3-seed sweep
-above. The transformer matches the UNet on the easy task but trails badly on Square with
-low-dimensional observations — until the observation modality is changed:
+Single-seed runs of the 1D DiT backbone (1000 epochs, n = 10 rollouts per evaluation),
+separate from the 3-seed sweep above — treat these as directional, not benchmark numbers.
+Image runs use robomimic's canonical per-task cameras and resolution, with a ResNet18 +
+SpatialSoftmax encoder and a `CropRandomizer`.
 
-| Square (hardest precision task) | best rollout success |
-|---------------------------------|----------------------|
-| Transformer, `low_dim`          | ~0.40                |
-| UNet, `low_dim` *(3-seed ref)*  | 0.57 ± 0.07          |
-| **Transformer, 2-camera images**| **1.00**             |
+| Task      | Transformer `low_dim` | **Transformer, images** | UNet `low_dim` *(3-seed ref)* |
+|-----------|-----------------------|-------------------------|-------------------------------|
+| Lift      | ~1.00                 | —                       | 100.0 ± 0.0                   |
+| Square    | ~0.40                 | **1.00**                | 56.7 ± 8.5                    |
+| Transport | —                     | 0.60                    | 81.7 ± 2.4                    |
+| Tool Hang | —                     | 0.10                    | 75.0 ± 7.1                    |
 
-On Lift the transformer reaches ~1.00 with `low_dim`, matching the UNet. On Square it
-plateaus around 0.25–0.40 and oscillates there for 700 epochs, even though its training
-loss matches Lift's — the velocity-regression objective is fit, but the fine
-observation-dependent corrections that decide a precision task are not.
+**Images are not a general win — they fix an observability bottleneck.** On **Square** the
+transformer plateaus at 0.25–0.40 from `low_dim` and oscillates there for 700 epochs, even
+though its training loss matches Lift's: the velocity objective is fit, but the fine
+observation-dependent corrections a precision task needs are not. Two camera views
+(`agentview` + `robot0_eye_in_hand`, 84×84) take it to **1.00** by epoch 300 — the
+bottleneck was the observation modality, not the architecture.
 
-Switching to **two camera views** (`agentview` + `robot0_eye_in_hand`, 84×84, ResNet18 +
-SpatialSoftmax + `CropRandomizer`) roughly doubles Square performance, reaching **1.00**
-by epoch 300 (mean ≈ 0.75 across evaluations, n = 10 rollouts). For this task the
-bottleneck was the observation modality, not the architecture. Reproduce with
-[`configs/transformer/fm_transformer_square_image.json`](configs/transformer/fm_transformer_square_image.json).
+That does not transfer to the tasks where low-dimensional state already worked well.
+**Transport** (4 cameras) reaches 0.60, and **Tool Hang** (240×240, the resolution its fine
+insertion needs) never exceeds 0.10 — zero success at ten consecutive evaluations, despite
+the *lowest* training loss of any run. Both remain well below their `low_dim` UNet
+references. Vision addresses what the policy can *perceive*; it does not make a hard task
+easy.
 
-> Image datasets are not distributed for robomimic v1.5 — generate them from the low-dim
-> demos' simulator states with
-> [`scripts/render_image_dataset.sbatch`](scripts/render_image_dataset.sbatch)
-> (wraps robomimic's `dataset_states_to_obs.py`).
+Reproduce with the `*_image.json` configs under
+[`configs/transformer/`](configs/transformer/).
+
+> **Generating image datasets.** robomimic v1.5 distributes no image HDF5s — render them
+> from the low-dim demos' simulator states with
+> [`scripts/render_image_dataset.sbatch`](scripts/render_image_dataset.sbatch) (wraps
+> `dataset_states_to_obs.py`). Settings are per-task, and using the wrong ones quietly
+> destroys performance: Transport needs **all four** cameras (a 2-camera policy cannot see
+> the second arm) and Tool Hang needs **240×240**, not 84×84.
 
 ## Installation
 

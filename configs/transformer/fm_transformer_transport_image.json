@@ -30,7 +30,7 @@
   "hdf5_cache_mode": "low_dim",
   "num_data_workers": 4,
   "num_epochs": 1000,
-  "batch_size": 64,
+  "batch_size": 32,
   "seed": 1
  },
  "algo": {
@@ -61,7 +61,9 @@
     ],
     "rgb": [
      "shouldercamera0_image",
-     "robot0_eye_in_hand_image"
+     "shouldercamera1_image",
+     "robot0_eye_in_hand_image",
+     "robot1_eye_in_hand_image"
     ]
    }
   },

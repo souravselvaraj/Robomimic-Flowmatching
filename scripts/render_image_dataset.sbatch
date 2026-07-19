@@ -1,7 +1,11 @@
 #!/bin/bash
-# Render a 2-camera image dataset from a low_dim dataset's sim states.
-#   sbatch scripts/render_image_dataset.sbatch <task> <camera1> <camera2>
-# e.g. sbatch scripts/render_image_dataset.sbatch tool_hang sideview robot0_eye_in_hand
+# Render an image dataset from a low_dim dataset's sim states.
+#   sbatch scripts/render_image_dataset.sbatch <task> <resolution> <camera...>
+# Use robomimic's canonical per-task settings (see its
+# scripts/extract_obs_from_raw_datasets.sh) -- they differ by task:
+#   square    84  agentview robot0_eye_in_hand
+#   tool_hang 240 sideview robot0_eye_in_hand           (needs the higher resolution)
+#   transport 84  shouldercamera0 shouldercamera1 robot0_eye_in_hand robot1_eye_in_hand
 # Written uncompressed on purpose: gzip chunks produced unreadable demos previously.
 #SBATCH -J fm_dsrender
 #SBATCH -A mmaghelih
@@ -29,14 +33,14 @@ RM=/scratch/sselvaraj/projects/Kuromoto-Diffusion-Policy/robomimic_base/robomimi
 VENV=/scratch/sselvaraj/projects/Kuromoto-Diffusion-Policy/robomimic_base/.train_venv
 ROOT=/scratch/sselvaraj/projects/Flowmatch/robomimic_data
 
-TASK="$1"; CAM1="$2"; CAM2="$3"
-echo "render[$TASK]: cameras=$CAM1,$CAM2 job=${SLURM_JOB_ID:-?} start=$(date +%T)"
+TASK="$1"; RES="$2"; shift 2; CAMS=("$@")
+echo "render[$TASK]: res=${RES}x${RES} cameras=${CAMS[*]} job=${SLURM_JOB_ID:-?} start=$(date +%T)"
 
 "$VENV/bin/python" -u "$RM/scripts/dataset_states_to_obs.py" \
   --dataset "$ROOT/$TASK/ph/low_dim_v15.hdf5" \
   --output_name image_v15.hdf5 \
-  --camera_names "$CAM1" "$CAM2" \
-  --camera_height 84 --camera_width 84 \
+  --camera_names "${CAMS[@]}" \
+  --camera_height "$RES" --camera_width "$RES" \
   --done_mode 2 --exclude-next-obs
 
 echo "render[$TASK]: done=$(date +%T) size=$(ls -la "$ROOT/$TASK/ph/image_v15.hdf5" 2>/dev/null | awk '{print $5}')"

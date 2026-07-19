@@ -30,7 +30,7 @@
   "hdf5_cache_mode": "low_dim",
   "num_data_workers": 4,
   "num_epochs": 1000,
-  "batch_size": 64,
+  "batch_size": 16,
   "seed": 1
  },
  "algo": {
@@ -83,8 +83,8 @@
     },
     "obs_randomizer_class": "CropRandomizer",
     "obs_randomizer_kwargs": {
-     "crop_height": 76,
-     "crop_width": 76,
+     "crop_height": 216,
+     "crop_width": 216,
      "num_crops": 1,
      "pos_enc": false
     }
