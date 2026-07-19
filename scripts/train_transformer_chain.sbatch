@@ -18,12 +18,15 @@ set -u
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"
 
-# Offscreen rendering for image-obs rollouts: this cluster's compute nodes have no
-# working libEGL, so use software OSMesa from the spack mesa module (its module does
-# not set LD_LIBRARY_PATH itself). Harmless for low_dim runs, which never render.
-export MUJOCO_GL=osmesa
-export PYOPENGL_PLATFORM=osmesa
-export LD_LIBRARY_PATH="/cm/shared/spack/opt/spack/linux-x86_64/mesa-25.0.5-uyltdzhyl5joo2r7i3kpl442bsndium2/lib:${LD_LIBRARY_PATH:-}"
+# Offscreen rendering for image-obs rollouts, on the GPU via EGL (~100x faster than
+# software OSMesa: ~1265 vs ~11 frames/sec). GPU nodes have the NVIDIA EGL driver,
+# libGLdispatch and the vendor ICD, but are missing only libEGL.so.1 (the GLVND
+# loader) that MuJoCo dlopens; output/eglshim holds a copy taken from the login node
+# (same Ubuntu 24.04 ABI), which dispatches to the node-local libEGL_nvidia.so.0.
+# Harmless for low_dim runs, which never render.
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+export LD_LIBRARY_PATH="/scratch/sselvaraj/projects/robomimic-cfm/output/eglshim:${LD_LIBRARY_PATH:-}"
 
 REPO=/scratch/sselvaraj/projects/robomimic-cfm
 VENV=/scratch/sselvaraj/projects/Kuromoto-Diffusion-Policy/robomimic_base/.train_venv

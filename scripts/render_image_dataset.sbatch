@@ -6,6 +6,7 @@
 #SBATCH -J fm_dsrender
 #SBATCH -A mmaghelih
 #SBATCH -p short,long
+#SBATCH --gres=gpu:1
 #SBATCH -c 4
 #SBATCH --mem=24G
 #SBATCH -t 11:59:00
@@ -15,10 +16,14 @@ set -u
 export PYTHONUNBUFFERED=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
-# compute nodes have no working libEGL -> software OSMesa from the spack mesa module
-export MUJOCO_GL=osmesa
-export PYOPENGL_PLATFORM=osmesa
-export LD_LIBRARY_PATH="/cm/shared/spack/opt/spack/linux-x86_64/mesa-25.0.5-uyltdzhyl5joo2r7i3kpl442bsndium2/lib:${LD_LIBRARY_PATH:-}"
+# Hardware GPU rendering via EGL (~100x faster than software OSMesa).
+# GPU nodes ship the NVIDIA EGL driver + libGLdispatch + the vendor ICD, but are
+# missing only libEGL.so.1 (the GLVND loader) that MuJoCo dlopens. output/eglshim
+# holds a copy of that loader taken from the login node (same Ubuntu 24.04 ABI);
+# it then dispatches to the node-local libEGL_nvidia.so.0.
+export MUJOCO_GL=egl
+export PYOPENGL_PLATFORM=egl
+export LD_LIBRARY_PATH="/scratch/sselvaraj/projects/robomimic-cfm/output/eglshim:${LD_LIBRARY_PATH:-}"
 
 RM=/scratch/sselvaraj/projects/Kuromoto-Diffusion-Policy/robomimic_base/robomimic
 VENV=/scratch/sselvaraj/projects/Kuromoto-Diffusion-Policy/robomimic_base/.train_venv
