@@ -30,6 +30,7 @@
 -------
 
 ## Latest Updates
+- [07/19/2026] Image-observation support for the transformer backbone: two camera views take Square from ~0.40 to **1.00** rollout success, past the low-dim UNet. Config + dataset-generation script included.
 - [07/17/2026] **v0.1.0** Added a Transformer (1D DiT) backbone alongside the UNet, with AdaLN-Zero conditioning on flow time + observations. Select it with `algo.transformer.enabled=true`.
 - [07/16/2026] Full 3-seed benchmark sweep across all five `low_dim` proficient-human tasks; CFM matches or beats Diffusion Policy, notably **+11.7 points on Square**.
 - [07/15/2026] Inference-speed benchmarks: **11× faster** than DDPM-100 at the default 10-step setting on an identical 65M-parameter UNet.
@@ -96,6 +97,38 @@ Per action-chunk latency on the identical 65M-parameter UNet (RTX PRO 6000, 100 
 At its default quality setting, CFM is **11× faster** than the standard DDPM-100 sampler.
 Against DDIM-10 (the same number of network evaluations) it is at wall-clock parity; its
 advantage there is quality retained at few steps rather than raw speed.
+
+### Transformer backbone and image observations (exploratory)
+
+<p align="center">
+  <img src="assets/square_image.gif" width="30%" alt="Square — image (2-camera) flow-matching policy"/>
+</p>
+
+Single-seed runs of the 1D DiT backbone (1000 epochs), separate from the 3-seed sweep
+above. The transformer matches the UNet on the easy task but trails badly on Square with
+low-dimensional observations — until the observation modality is changed:
+
+| Square (hardest precision task) | best rollout success |
+|---------------------------------|----------------------|
+| Transformer, `low_dim`          | ~0.40                |
+| UNet, `low_dim` *(3-seed ref)*  | 0.57 ± 0.07          |
+| **Transformer, 2-camera images**| **1.00**             |
+
+On Lift the transformer reaches ~1.00 with `low_dim`, matching the UNet. On Square it
+plateaus around 0.25–0.40 and oscillates there for 700 epochs, even though its training
+loss matches Lift's — the velocity-regression objective is fit, but the fine
+observation-dependent corrections that decide a precision task are not.
+
+Switching to **two camera views** (`agentview` + `robot0_eye_in_hand`, 84×84, ResNet18 +
+SpatialSoftmax + `CropRandomizer`) roughly doubles Square performance, reaching **1.00**
+by epoch 300 (mean ≈ 0.75 across evaluations, n = 10 rollouts). For this task the
+bottleneck was the observation modality, not the architecture. Reproduce with
+[`configs/transformer/fm_transformer_square_image.json`](configs/transformer/fm_transformer_square_image.json).
+
+> Image datasets are not distributed for robomimic v1.5 — generate them from the low-dim
+> demos' simulator states with
+> [`scripts/render_image_dataset.sbatch`](scripts/render_image_dataset.sbatch)
+> (wraps robomimic's `dataset_states_to_obs.py`).
 
 ## Installation
 
