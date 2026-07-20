@@ -30,7 +30,8 @@
 -------
 
 ## Latest Updates
-- [07/20/2026] Image-observation results are now **3-seed**: Square **0.93 ± 0.06** (vs ~0.40 from `low_dim`, clearing the UNet reference), Transport 0.83 ± 0.21 (on par with its UNet reference), Tool Hang 0.10 ± 0.10. Supersedes the single-seed numbers — Transport in particular was reported as 0.60 from an unlucky seed.
+- [07/20/2026] Transformer capacity is not the bottleneck on Square: scaling the DiT 9.8M → 48.5M moves `low_dim` success 0.32 ± 0.08 → 0.35 ± 0.05 (3 seeds each), still ~0.22 behind the UNet. `algo.transformer.mlp_ratio` is now configurable alongside width/depth/heads.
+- [07/20/2026] Image-observation results are now **3-seed**: Square **0.93 ± 0.06** (vs 0.32 ± 0.08 from `low_dim`, clearing the UNet reference), Transport 0.83 ± 0.21 (on par with its UNet reference), Tool Hang 0.10 ± 0.10. Supersedes the single-seed numbers — Transport in particular was reported as 0.60 from an unlucky seed.
 - [07/19/2026] Image observations for the transformer backbone, with GPU (EGL) dataset rendering ~100× faster than software OSMesa, and a self-resuming SLURM training chain.
 - [07/17/2026] **v0.1.0** Added a Transformer (1D DiT) backbone alongside the UNet, with AdaLN-Zero conditioning on flow time + observations. Select it with `algo.transformer.enabled=true`.
 - [07/16/2026] Full 3-seed benchmark sweep across all five `low_dim` proficient-human tasks; CFM matches or beats Diffusion Policy, notably **+11.7 points on Square**.
@@ -116,7 +117,7 @@ read them as directional.
 | Task      | Transformer `low_dim` | **Transformer, images** | UNet `low_dim` *(ref)* |
 |-----------|-----------------------|-------------------------|------------------------|
 | Lift      | ~1.00 *(1 seed)*      | —                       | 100.0 ± 0.0            |
-| Square    | ~0.40 *(1 seed)*      | **0.93 ± 0.06**         | 56.7 ± 8.5             |
+| Square    | 0.32 ± 0.08           | **0.93 ± 0.06**         | 56.7 ± 8.5             |
 | Transport | —                     | 0.83 ± 0.21             | 81.7 ± 2.4             |
 | Tool Hang | —                     | 0.10 ± 0.10             | 75.0 ± 7.1             |
 
@@ -128,6 +129,23 @@ observation-dependent corrections a precision task needs are not. Two camera vie
 reference — for this task the bottleneck was the observation modality, not the
 architecture.
 
+**It is also not a capacity problem.** The default DiT is 9.8M parameters against a 65M
+UNet, so the `low_dim` gap could have been a compute-matching artifact. Scaling it to
+48.5M (`n_emb=512`, `n_layer=10`, `n_head=8`) on Square `low_dim`, 3 seeds each, does not
+close it:
+
+| Square `low_dim`     | params | 3-seed success |
+|----------------------|-------:|----------------|
+| Transformer          |  9.8M  | 0.32 ± 0.08    |
+| Transformer, scaled  | 48.5M  | 0.35 ± 0.05    |
+| UNet *(ref)*         |   65M  | 0.57 ± 0.09    |
+
+A 5× parameter increase buys **+0.03, about half a standard deviation** — noise. The
+transformer still trails the UNet by ~0.22 at a comparable budget, so on this task the
+difference is architectural (the UNet's temporal convolutions appear to suit action-chunk
+regression better) rather than a matter of size. Scaling the backbone is not the lever;
+changing what the policy observes is.
+
 Elsewhere the effect disappears. **Transport** (4 cameras) reaches 0.83 ± 0.21, which is
 indistinguishable from its `low_dim` UNet reference given that spread — images neither help
 nor hurt. **Tool Hang** (240×240, the resolution its fine insertion needs) never exceeds
@@ -135,9 +153,10 @@ nor hurt. **Tool Hang** (240×240, the resolution its fine insertion needs) neve
 despite the *lowest* training loss of any run here. Vision addresses what the policy can
 *perceive*; it does not make a hard task easy.
 
-> Seeds matter for these: Transport's individual seeds were 0.60 / 0.90 / 1.00. Any one of
-> them alone would support a different conclusion, which is why the single-seed numbers
-> this section previously reported were revised.
+> Seeds matter for these. Transport's individual seeds were 0.60 / 0.90 / 1.00, and the
+> Square `low_dim` transformer's were 0.40 / 0.25 / 0.30 — the 0.40 previously reported
+> here was its best seed, not its expectation. Any single run would support a different
+> conclusion, so the single-seed numbers this section originally carried were revised.
 
 Reproduce with the `*_image.json` configs under
 [`configs/transformer/`](configs/transformer/) (seeds 2 and 3 are the `*_seed2/3.json`
