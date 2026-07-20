@@ -55,6 +55,7 @@ denoising steps), receding-horizon style, matching the Diffusion Policy control 
 - **Two interchangeable backbones** — the Diffusion Policy `ConditionalUnet1D`, or a 1D DiT Transformer (`ConditionalTransformer1D`) with the exact same call signature.
 - **Fast few-step inference** — near-straight probability paths integrate in 5–10 Euler steps; **11× faster** than DDPM-100 at matched quality.
 - **Simple objective** — plain regression onto a closed-form target velocity; no noise schedules or scheduler library at training time.
+- **Low-dim or image observations** — camera inputs need no code change, only config; dataset generation and cluster training helpers are included ([Image observations](#image-observations)).
 - **Fully reproducible** — the commit-pinned robomimic fork and all 30 sweep configs are included; `uv sync` reproduces the exact locked environment.
 
 ## Results
@@ -134,12 +135,8 @@ easy.
 Reproduce with the `*_image.json` configs under
 [`configs/transformer/`](configs/transformer/).
 
-> **Generating image datasets.** robomimic v1.5 distributes no image HDF5s — render them
-> from the low-dim demos' simulator states with
-> [`scripts/render_image_dataset.sbatch`](scripts/render_image_dataset.sbatch) (wraps
-> `dataset_states_to_obs.py`). Settings are per-task, and using the wrong ones quietly
-> destroys performance: Transport needs **all four** cameras (a 2-camera policy cannot see
-> the second arm) and Tool Hang needs **240×240**, not 84×84.
+See [Image observations](#image-observations) for how to generate the datasets and
+configure an image run.
 
 ## Installation
 
@@ -212,6 +209,80 @@ Run the test suite (trains 5 variants end-to-end on CPU in a few minutes):
 python tests/test_flow_matching.py
 ```
 
+## Image observations
+
+The algorithm consumes camera observations without any code change — it builds its
+observation encoder from robomimic's `ObservationGroupEncoder`, so images are purely a
+config matter. Getting the data and the settings right is the work.
+
+### 1. Generate the dataset
+
+robomimic v1.5 **distributes no image HDF5s**; `download_datasets.py` will tell you to
+create them locally. Render them from the low-dim demos' simulator states:
+
+```bash
+# sbatch scripts/render_image_dataset.sbatch <task> <resolution> <camera...>
+sbatch scripts/render_image_dataset.sbatch square    84  agentview robot0_eye_in_hand
+sbatch scripts/render_image_dataset.sbatch tool_hang 240 sideview robot0_eye_in_hand
+sbatch scripts/render_image_dataset.sbatch transport 84 \
+    shouldercamera0 shouldercamera1 robot0_eye_in_hand robot1_eye_in_hand
+```
+
+**Cameras and resolution are per-task**, and copying one task's settings onto another
+silently produces near-zero success rather than an error — a 2-camera Transport policy
+cannot see the second arm, and Tool Hang's fine insertion is unreadable at 84×84. These
+match robomimic's own `scripts/extract_obs_from_raw_datasets.sh`:
+
+| Task      | Resolution | Cameras                                                                  |
+|-----------|-----------|---------------------------------------------------------------------------|
+| Lift / Can / Square | 84×84  | `agentview`, `robot0_eye_in_hand`                                  |
+| Tool Hang | **240×240** | `sideview`, `robot0_eye_in_hand`                                        |
+| Transport | 84×84     | `shouldercamera0`, `shouldercamera1`, `robot0_eye_in_hand`, `robot1_eye_in_hand` |
+
+Datasets are written **uncompressed on purpose**. Writing them with `--compress` produced
+gzip chunks that raised `Can't synchronously read data (filter returned failure during
+read)` on a handful of demos — and only when the whole dataset was read, so it surfaced at
+training time rather than at generation time. Uncompressed costs disk (Tool Hang at
+240×240 is ~33 GB) and avoids the problem entirely.
+
+### 2. Configure the run
+
+Start from an existing `*_image.json` under [configs/transformer/](configs/transformer/).
+The parts that matter beyond the camera keys:
+
+```jsonc
+"train": {
+  "hdf5_cache_mode": "low_dim",   // REQUIRED for images: "all" caches every decoded
+                                  // sample in RAM and exhausts memory
+  "num_data_workers": 4,
+  "batch_size": 64                // 16 at 240x240; 32 for 4 cameras
+},
+"observation": { "encoder": { "rgb": {
+  "core_class": "VisualCore",     // ResNet18 + SpatialSoftmax
+  "obs_randomizer_class": "CropRandomizer",
+  "obs_randomizer_kwargs": { "crop_height": 76, "crop_width": 76 }  // 216 at 240x240
+}}}
+```
+
+Scale the crop with the resolution (76/84 ≈ 216/240) and reduce `batch_size` as pixels or
+cameras go up.
+
+### 3. Train
+
+```bash
+python scripts/train.py --config configs/transformer/fm_transformer_square_image.json
+```
+
+On a cluster, [`scripts/train_transformer_chain.sbatch`](scripts/train_transformer_chain.sbatch)
+runs a config to completion unattended: each window resumes from `last.pth` and queues its
+own successor (`--dependency=afterany`), so a crash or a wall-clock timeout is recovered
+automatically. The chain stops itself once `train.num_epochs` is reached, and is capped at
+12 windows so a persistently failing run cannot loop forever.
+
+```bash
+sbatch scripts/train_transformer_chain.sbatch configs/transformer/fm_transformer_square_image.json
+```
+
 ## How it works
 
 The policy learns a velocity field along the linear interpolant between Gaussian noise
@@ -256,21 +327,78 @@ robomimic_cfm/
   transformer_nets.py                 # ConditionalTransformer1D (1D DiT) backbone
   config.py                           # FlowMatchingConfig (BaseConfig, ALGO_NAME="flow_matching")
   exps/templates/flow_matching.json   # generated config template
-scripts/                              # train.py (wrapper) + eval / render / inference-benchmark
+scripts/
+  train.py                            # thin wrapper: registers the algo, hands off to robomimic
+  render_image_dataset.sbatch         # generate image datasets from sim states (GPU/EGL)
+  train_transformer_chain.sbatch      # self-resuming training chain (crash / timeout safe)
+  train_transformer.sbatch            # single-window training job
+  render_video.py                     # rollout video from a checkpoint
+  benchmark_inference.py              # sampler latency benchmark
+  gen_benchmark_configs.py            # regenerate the 3-seed sweep configs
 tests/test_flow_matching.py           # 5 variants through train.py + reload + rollout
-configs/                              # per-task + 3-seed benchmark configs (reproduction)
+configs/
+  benchmark/                          # 3-seed sweep, {fm,dp} x 5 tasks (reproduction)
+  transformer/                        # 1D DiT configs, incl. *_image.json vision runs
+assets/                               # rollout GIFs used in this README
 docs/CONDITIONAL_FLOW_MATCHING.md     # design notes
 ```
 
 ## Troubleshooting
 
-- **Rendering on headless nodes** — MuJoCo needs an offscreen GL backend. Prefer software
-  OSMesa (`MUJOCO_GL=osmesa PYOPENGL_PLATFORM=osmesa`); EGL (`MUJOCO_GL=egl`) works where a
-  GPU/EGL stack is available. See [scripts/render_video.py](scripts/render_video.py).
+**Algorithm**
+
 - **`actions must be in range [-1,1]`** — enable `train.hdf5_normalize_action` in the
   config; standard robomimic `ph` datasets are already normalized.
 - **Learning rate stuck at 0** — the cosine schedule warms up per gradient step; keep
   `optim_params.policy.learning_rate.step_every_batch=true`.
+- **Loss looks fine but rollout success is ~0** — expect this before suspecting a bug. The
+  velocity-regression loss is dominated by the coarse noise→action direction, so a model
+  can fit it well while missing the fine, observation-dependent corrections a precision
+  task needs. Compare success curves, not losses; if the loss matches a task you *can*
+  solve, the problem is usually observability or capacity.
+
+**Image observations**
+
+- **Near-zero success with a correct-looking image config** — check cameras and resolution
+  against the [per-task table](#1-generate-the-dataset) first. Wrong settings fail
+  silently, not loudly.
+- **Host RAM exhausted / training stalls while "caching get_item calls"** — `hdf5_cache_mode`
+  is `"all"` (the low-dim default), which caches every decoded sample. Set it to
+  `"low_dim"` for image datasets.
+- **`Can't synchronously read data (filter returned failure during read)`** — gzip-compressed
+  image chunks that fail to decompress, often on only a few demos and only on a full read.
+  Regenerate the dataset uncompressed (the provided render script does).
+- **CUDA OOM** — lower `train.batch_size`: 240×240 or 4-camera runs need roughly 16–32
+  rather than 64.
+
+**Rendering (headless / cluster)**
+
+- MuJoCo needs an offscreen GL backend: `MUJOCO_GL=egl` for GPU rendering,
+  `MUJOCO_GL=osmesa` for software. EGL is ~100× faster (~1265 vs ~11 frames/sec here) and
+  is worth fixing rather than working around — it dominates both dataset generation and
+  image rollout evaluation.
+- **`'NoneType' object has no attribute 'eglQueryString'`** — the EGL loader could not be
+  dlopened. On GPU nodes this is usually *not* a missing driver: check whether
+  `libEGL.so.1` (the vendor-neutral **GLVND loader**) exists, separately from
+  `libEGL_nvidia.so.0` (the driver). Nodes here ship the driver, `libGLdispatch.so.0` and
+  the vendor ICD but omit `libEGL.so.1`, so EGL init returns `None`. Supplying that one
+  library (e.g. copying it from a host with the same distro/ABI onto shared storage and
+  prepending its directory to `LD_LIBRARY_PATH`) restores hardware rendering; the sbatch
+  scripts here do exactly that. Symlinking the *driver* as `libEGL.so.1` does not work —
+  it fails with `undefined symbol: eglQueryString`, since the driver is only usable behind
+  the loader.
+- **`BlockingIOError: [Errno 11] write could not complete without blocking`** — an
+  intermittent flush failure from tqdm/logging on some network filesystems that kills a
+  run mid-training. It is not caused by the model. Use
+  [`scripts/train_transformer_chain.sbatch`](scripts/train_transformer_chain.sbatch), which
+  resumes from the last checkpoint automatically.
+
+**Long runs**
+
+- Resuming restores the config saved in the experiment directory, so editing the config
+  file mid-run has no effect on a `--resume`. Start a fresh run to change hyperparameters.
+- Software-rendered rollout evaluation is expensive (tens of minutes per evaluation).
+  Lower `experiment.rollout.n` or raise `rate` if you cannot use GPU rendering.
 
 ## Citation
 
