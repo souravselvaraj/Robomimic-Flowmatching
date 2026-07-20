@@ -211,6 +211,40 @@ Enable exactly one of the two velocity networks in the config:
 }
 ```
 
+### Sizing the transformer
+
+The 1D DiT treats the `Tp` predicted action steps as tokens; its capacity is set entirely
+from config, with no code changes:
+
+```jsonc
+"algo": { "transformer": {
+  "enabled": true,
+  "n_emb": 256,                    // embedding width — must be divisible by n_head
+  "n_layer": 8,                    // number of DiT blocks (depth)
+  "n_head": 4,                     // attention heads
+  "mlp_ratio": 4.0,                // feed-forward hidden width = n_emb * mlp_ratio
+  "p_drop": 0.1,                   // dropout
+  "diffusion_step_embed_dim": 256, // sinusoidal flow-time embedding width
+  "causal": false                  // true = left-to-right over the action chunk
+}}
+```
+
+Roughly what the knobs cost, for `Da = 7`, `Tp = 16`:
+
+| `n_emb` | `n_layer` | `n_head` | `mlp_ratio` | params |
+|--------:|----------:|---------:|------------:|-------:|
+| 256 | 8  | 4 | 4.0 | 9.8M *(default)* |
+| 256 | 8  | 4 | 2.0 | 7.7M |
+| 256 | 8  | 4 | 8.0 | 14.0M |
+| 256 | 16 | 4 | 4.0 | 19.3M |
+| 512 | 8  | 8 | 4.0 | 39.0M |
+| 512 | 10 | 8 | 4.0 | 48.5M *(≈ the 65M UNet)* |
+
+Width (`n_emb`) moves parameters fastest, since attention and the FFN both scale with it;
+depth is roughly linear. The default 9.8M is **~6× smaller than the UNet** it is compared
+against, so match the budget before concluding anything about the architecture. `n_emb %
+n_head != 0` raises immediately rather than failing inside the attention call.
+
 Run the test suite (trains 5 variants end-to-end on CPU in a few minutes):
 
 ```bash

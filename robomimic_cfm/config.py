@@ -60,9 +60,10 @@ class FlowMatchingConfig(BaseConfig):
         # Transformer (1D DiT) parameters - set unet.enabled=False and
         # transformer.enabled=True to use this backbone instead
         self.algo.transformer.enabled = False
-        self.algo.transformer.n_emb = 256                     # embedding width
+        self.algo.transformer.n_emb = 256                     # embedding width (must divide by n_head)
         self.algo.transformer.n_layer = 8                     # number of DiT blocks
         self.algo.transformer.n_head = 4                      # attention heads
+        self.algo.transformer.mlp_ratio = 4.0                 # FFN hidden width = n_emb * mlp_ratio
         self.algo.transformer.p_drop = 0.1                    # dropout
         self.algo.transformer.diffusion_step_embed_dim = 256  # sinusoidal time embed width
         self.algo.transformer.causal = False                  # bidirectional over the action chunk

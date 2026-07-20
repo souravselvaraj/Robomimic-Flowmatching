@@ -57,13 +57,14 @@ class ConditionalTransformer1D(nn.Module):
         input_dim (int): action dimension Da.
         global_cond_dim (int): dimension of the flattened observation conditioning
             (obs_horizon * obs_dim); may be 0/None for an unconditional model.
-        n_emb (int): transformer embedding width.
+        n_emb (int): transformer embedding width. Must be divisible by @n_head.
         n_layer (int): number of DiT blocks.
         n_head (int): attention heads.
         p_drop (float): dropout probability.
         max_positions (int): maximum action-chunk length (prediction horizon).
         diffusion_step_embed_dim (int): width of the sinusoidal time embedding.
         causal (bool): if True, mask attention to be left-to-right over the chunk.
+        mlp_ratio (float): feed-forward hidden width as a multiple of @n_emb.
     """
 
     def __init__(
@@ -77,8 +78,14 @@ class ConditionalTransformer1D(nn.Module):
         max_positions=16,
         diffusion_step_embed_dim=256,
         causal=False,
+        mlp_ratio=4.0,
     ):
         super().__init__()
+        # nn.MultiheadAttention splits n_emb across heads; catch a bad pairing here
+        # rather than deep inside the attention call
+        assert n_emb % n_head == 0, (
+            "transformer n_emb ({}) must be divisible by n_head ({})".format(n_emb, n_head)
+        )
         self.input_proj = nn.Linear(input_dim, n_emb)
         self.pos_emb = nn.Parameter(torch.zeros(1, max_positions, n_emb))
         self.drop = nn.Dropout(p_drop)
@@ -98,7 +105,7 @@ class ConditionalTransformer1D(nn.Module):
             )
 
         self.blocks = nn.ModuleList(
-            [DiTBlock(n_emb, n_head, p_drop) for _ in range(n_layer)]
+            [DiTBlock(n_emb, n_head, p_drop, mlp_ratio=mlp_ratio) for _ in range(n_layer)]
         )
         self.norm_out = nn.LayerNorm(n_emb, elementwise_affine=False, eps=1e-6)
         self.ada_ln_out = nn.Sequential(nn.SiLU(), nn.Linear(n_emb, 2 * n_emb))

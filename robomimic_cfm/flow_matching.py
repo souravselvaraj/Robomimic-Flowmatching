@@ -88,6 +88,7 @@ class FlowMatchingUNet(PolicyAlgo):
                 max_positions=self.algo_config.horizon.prediction_horizon,
                 diffusion_step_embed_dim=self.algo_config.transformer.diffusion_step_embed_dim,
                 causal=self.algo_config.transformer.causal,
+                mlp_ratio=self.algo_config.transformer.mlp_ratio,
             )
         else:
             # same convolutional backbone as Diffusion Policy
