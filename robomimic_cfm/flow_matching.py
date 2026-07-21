@@ -89,6 +89,8 @@ class FlowMatchingUNet(PolicyAlgo):
                 diffusion_step_embed_dim=self.algo_config.transformer.diffusion_step_embed_dim,
                 causal=self.algo_config.transformer.causal,
                 mlp_ratio=self.algo_config.transformer.mlp_ratio,
+                cross_attn=self.algo_config.transformer.cross_attn,
+                n_obs_steps=self.algo_config.horizon.observation_horizon,
             )
         else:
             # same convolutional backbone as Diffusion Policy

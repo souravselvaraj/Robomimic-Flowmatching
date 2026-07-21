@@ -22,9 +22,15 @@ def modulate(x, shift, scale):
 
 
 class DiTBlock(nn.Module):
-    """A DiT block: AdaLN-modulated self-attention + MLP, with gated residuals."""
+    """
+    A DiT block: AdaLN-modulated self-attention + MLP, with gated residuals.
 
-    def __init__(self, n_emb, n_head, p_drop, mlp_ratio=4.0):
+    With @cross_attn, an extra cross-attention sublayer lets the action tokens read a
+    conditioning sequence (the per-step observation tokens) directly, instead of only
+    seeing observations through the global AdaLN shift/scale.
+    """
+
+    def __init__(self, n_emb, n_head, p_drop, mlp_ratio=4.0, cross_attn=False):
         super().__init__()
         self.norm1 = nn.LayerNorm(n_emb, elementwise_affine=False, eps=1e-6)
         self.attn = nn.MultiheadAttention(n_emb, n_head, dropout=p_drop, batch_first=True)
@@ -39,11 +45,22 @@ class DiTBlock(nn.Module):
         nn.init.zeros_(self.ada_ln[-1].weight)
         nn.init.zeros_(self.ada_ln[-1].bias)
 
-    def forward(self, x, c, attn_mask=None):
+        if cross_attn:
+            self.norm_cross = nn.LayerNorm(n_emb, elementwise_affine=False, eps=1e-6)
+            self.cross = nn.MultiheadAttention(n_emb, n_head, dropout=p_drop, batch_first=True)
+            # zero-init gate so the block still starts as an identity function
+            self.cross_gate = nn.Parameter(torch.zeros(n_emb))
+        else:
+            self.norm_cross = self.cross = self.cross_gate = None
+
+    def forward(self, x, c, memory=None, attn_mask=None):
         shift1, scale1, gate1, shift2, scale2, gate2 = self.ada_ln(c).chunk(6, dim=-1)
         h = modulate(self.norm1(x), shift1, scale1)
         attn_out, _ = self.attn(h, h, h, attn_mask=attn_mask, need_weights=False)
         x = x + gate1.unsqueeze(1) * attn_out
+        if self.cross is not None and memory is not None:
+            cross_out, _ = self.cross(self.norm_cross(x), memory, memory, need_weights=False)
+            x = x + self.cross_gate * cross_out
         h = modulate(self.norm2(x), shift2, scale2)
         x = x + gate2.unsqueeze(1) * self.mlp(h)
         return x
@@ -65,6 +82,11 @@ class ConditionalTransformer1D(nn.Module):
         diffusion_step_embed_dim (int): width of the sinusoidal time embedding.
         causal (bool): if True, mask attention to be left-to-right over the chunk.
         mlp_ratio (float): feed-forward hidden width as a multiple of @n_emb.
+        cross_attn (bool): if True, split @global_cond into @n_obs_steps tokens and let the
+            action tokens cross-attend to them, with AdaLN then carrying only the flow time.
+            If False (default), observations are folded into the global AdaLN vector.
+        n_obs_steps (int): number of observation steps packed into @global_cond. Only used
+            when @cross_attn is True; @global_cond_dim must be divisible by it.
     """
 
     def __init__(
@@ -79,6 +101,8 @@ class ConditionalTransformer1D(nn.Module):
         diffusion_step_embed_dim=256,
         causal=False,
         mlp_ratio=4.0,
+        cross_attn=False,
+        n_obs_steps=1,
     ):
         super().__init__()
         # nn.MultiheadAttention splits n_emb across heads; catch a bad pairing here
@@ -97,15 +121,26 @@ class ConditionalTransformer1D(nn.Module):
             nn.SiLU(),
             nn.Linear(n_emb, n_emb),
         )
-        # observation conditioning -> added to the time vector
         self.has_cond = global_cond_dim is not None and global_cond_dim > 0
-        if self.has_cond:
+        self.cross_attn = bool(cross_attn) and self.has_cond
+        self.n_obs_steps = n_obs_steps
+        if self.cross_attn:
+            # observations become a short sequence of tokens the action steps attend to
+            assert global_cond_dim % n_obs_steps == 0, (
+                "global_cond_dim ({}) must be divisible by n_obs_steps ({})".format(
+                    global_cond_dim, n_obs_steps)
+            )
+            self.obs_token_proj = nn.Linear(global_cond_dim // n_obs_steps, n_emb)
+            self.obs_pos_emb = nn.Parameter(torch.zeros(1, n_obs_steps, n_emb))
+        elif self.has_cond:
+            # observation conditioning -> added to the time vector
             self.cond_mlp = nn.Sequential(
                 nn.Linear(global_cond_dim, n_emb), nn.SiLU(), nn.Linear(n_emb, n_emb)
             )
 
         self.blocks = nn.ModuleList(
-            [DiTBlock(n_emb, n_head, p_drop, mlp_ratio=mlp_ratio) for _ in range(n_layer)]
+            [DiTBlock(n_emb, n_head, p_drop, mlp_ratio=mlp_ratio, cross_attn=self.cross_attn)
+             for _ in range(n_layer)]
         )
         self.norm_out = nn.LayerNorm(n_emb, elementwise_affine=False, eps=1e-6)
         self.ada_ln_out = nn.Sequential(nn.SiLU(), nn.Linear(n_emb, 2 * n_emb))
@@ -116,6 +151,8 @@ class ConditionalTransformer1D(nn.Module):
 
         # init
         nn.init.normal_(self.pos_emb, std=0.02)
+        if self.cross_attn:
+            nn.init.normal_(self.obs_pos_emb, std=0.02)
         nn.init.zeros_(self.ada_ln_out[-1].weight)
         nn.init.zeros_(self.ada_ln_out[-1].bias)
         # zero-init the output head so the initial velocity field is ~0
@@ -137,8 +174,14 @@ class ConditionalTransformer1D(nn.Module):
             t = t.expand(B)
 
         c = self.time_mlp(t)  # [B, n_emb]
+        memory = None
         if self.has_cond and global_cond is not None:
-            c = c + self.cond_mlp(global_cond)
+            if self.cross_attn:
+                # [B, To*D] -> [B, To, n_emb] tokens; AdaLN then carries only the flow time
+                obs = global_cond.view(B, self.n_obs_steps, -1)
+                memory = self.obs_token_proj(obs) + self.obs_pos_emb
+            else:
+                c = c + self.cond_mlp(global_cond)
 
         x = self.input_proj(sample) + self.pos_emb[:, :T]
         x = self.drop(x)
@@ -150,7 +193,7 @@ class ConditionalTransformer1D(nn.Module):
             )
 
         for block in self.blocks:
-            x = block(x, c, attn_mask=attn_mask)
+            x = block(x, c, memory=memory, attn_mask=attn_mask)
 
         shift, scale = self.ada_ln_out(c).chunk(2, dim=-1)
         x = modulate(self.norm_out(x), shift, scale)

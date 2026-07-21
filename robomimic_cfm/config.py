@@ -67,6 +67,7 @@ class FlowMatchingConfig(BaseConfig):
         self.algo.transformer.p_drop = 0.1                    # dropout
         self.algo.transformer.diffusion_step_embed_dim = 256  # sinusoidal time embed width
         self.algo.transformer.causal = False                  # bidirectional over the action chunk
+        self.algo.transformer.cross_attn = False              # True: obs as tokens the actions cross-attend to
 
         # EMA parameters
         self.algo.ema.enabled = True
